@@ -1,0 +1,504 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+WIKI_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CONFIG="$WIKI_ROOT/config.env"
+
+# ── Setup: first-time initialization ──
+
+run_setup() {
+  echo "=== wiki-add setup ==="
+  echo ""
+
+  if [[ -f "$CONFIG" ]]; then
+    echo "Existing config found at $CONFIG"
+    echo -n "Overwrite? (y/N): "
+    read -r confirm
+    if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+      echo "Setup cancelled."
+      exit 0
+    fi
+  fi
+
+  echo "This will create your config and initialize the wiki structure."
+  echo ""
+
+  # Vault name
+  local default_vault="llm-wiki-obsidian-vault"
+  echo -n "Obsidian vault directory name [$default_vault]: "
+  read -r vault_name
+  vault_name="${vault_name:-$default_vault}"
+
+  # Topics subdirectory
+  local default_topics="topics"
+  echo -n "Topics subdirectory within vault [$default_topics]: "
+  read -r topics_sub
+  topics_sub="${topics_sub:-$default_topics}"
+
+  # Fabric pattern
+  local default_pattern="wiki_generate"
+  echo -n "Fabric pattern name [$default_pattern]: "
+  read -r pattern
+  pattern="${pattern:-$default_pattern}"
+
+  # Fabric model (optional)
+  echo -n "Fabric model (leave blank for default): "
+  read -r model
+  model="${model:-}"
+
+  # Write config
+  cat > "$CONFIG" <<EOF
+VAULT_NAME="$vault_name"
+TOPICS_SUBDIR="$topics_sub"
+PATTERN="$pattern"
+FABRIC_MODEL="$model"
+EOF
+
+  echo ""
+  echo "Config saved to $CONFIG"
+
+  # Create directory structure
+  local vault_dir="$WIKI_ROOT/$vault_name"
+  local topics_dir="$vault_dir/$topics_sub"
+  mkdir -p "$topics_dir" "$WIKI_ROOT/raw"
+
+  # Create index.md if it doesn't exist
+  if [[ ! -f "$vault_dir/index.md" ]]; then
+    cat > "$vault_dir/index.md" <<'EOF'
+# Wiki Index
+
+Auto-generated index of all wiki pages.
+EOF
+    echo "Created $vault_dir/index.md"
+  fi
+
+  # Create log.md if it doesn't exist
+  if [[ ! -f "$vault_dir/log.md" ]]; then
+    cat > "$vault_dir/log.md" <<'EOF'
+# Activity Log
+
+EOF
+    echo "Created $vault_dir/log.md"
+  fi
+
+  # Install fabric pattern from bundled patterns/
+  local pattern_dir="$HOME/.config/fabric/patterns/$pattern"
+  local bundled_pattern="$WIKI_ROOT/patterns/$pattern/system.md"
+  if [[ -f "$bundled_pattern" ]]; then
+    mkdir -p "$pattern_dir"
+    cp "$bundled_pattern" "$pattern_dir/system.md"
+    echo "Installed fabric pattern '$pattern' -> $pattern_dir"
+  elif [[ -d "$pattern_dir" ]]; then
+    echo "Fabric pattern '$pattern' already installed."
+  else
+    echo ""
+    echo "Warning: No bundled pattern found at patterns/$pattern/system.md"
+    echo "         and no existing pattern at $pattern_dir"
+    echo "         You will need to create the pattern manually."
+  fi
+
+  # Check dependencies
+  echo ""
+  echo "Checking dependencies..."
+  local all_good=true
+  if command -v fabric-ai &>/dev/null; then
+    echo "  [ok] fabric-ai"
+  else
+    echo "  [!!] fabric-ai not found (install with: brew install fabric-ai)"
+    all_good=false
+  fi
+  if command -v pdftotext &>/dev/null; then
+    echo "  [ok] pdftotext (PDF support)"
+  else
+    echo "  [--] pdftotext not found (optional, install with: brew install poppler)"
+  fi
+  if command -v python3 &>/dev/null; then
+    echo "  [ok] python3"
+  else
+    echo "  [!!] python3 not found"
+    all_good=false
+  fi
+  if command -v curl &>/dev/null; then
+    echo "  [ok] curl"
+  else
+    echo "  [!!] curl not found"
+    all_good=false
+  fi
+
+  echo ""
+  echo "Setup complete!"
+  echo ""
+  echo "Directory structure:"
+  echo "  $WIKI_ROOT/"
+  echo "  ├── bin/wiki-add"
+  echo "  ├── config.env"
+  echo "  ├── raw/"
+  echo "  └── $vault_name/"
+  echo "      ├── index.md"
+  echo "      ├── log.md"
+  echo "      └── $topics_sub/"
+  echo ""
+  echo "Usage:"
+  echo "  wiki-add -c <category> <url>"
+  exit 0
+}
+
+# ── Config: view or change settings ──
+
+run_config() {
+  if [[ ! -f "$CONFIG" ]]; then
+    echo "No config found. Run 'wiki-add --setup' first." >&2
+    exit 1
+  fi
+
+  source "$CONFIG"
+
+  echo "=== wiki-add config ==="
+  echo ""
+  echo "Config file: $CONFIG"
+  echo ""
+  echo "Current settings:"
+  echo "  1) Vault name:       $VAULT_NAME"
+  echo "  2) Topics subdir:    $TOPICS_SUBDIR"
+  echo "  3) Fabric pattern:   $PATTERN"
+  echo "  4) Fabric model:     ${FABRIC_MODEL:-<default>}"
+  echo ""
+  echo -n "Enter setting number to change (or 'q' to quit): "
+  read -r choice
+
+  case "$choice" in
+    1)
+      echo -n "New vault name [$VAULT_NAME]: "
+      read -r val
+      if [[ -n "$val" ]]; then
+        sed -i '' "s|^VAULT_NAME=.*|VAULT_NAME=\"$val\"|" "$CONFIG"
+        echo "Updated VAULT_NAME to '$val'"
+        echo ""
+        echo "Note: If you renamed the directory, make sure it matches."
+      fi
+      ;;
+    2)
+      echo -n "New topics subdir [$TOPICS_SUBDIR]: "
+      read -r val
+      if [[ -n "$val" ]]; then
+        sed -i '' "s|^TOPICS_SUBDIR=.*|TOPICS_SUBDIR=\"$val\"|" "$CONFIG"
+        echo "Updated TOPICS_SUBDIR to '$val'"
+      fi
+      ;;
+    3)
+      echo -n "New fabric pattern [$PATTERN]: "
+      read -r val
+      if [[ -n "$val" ]]; then
+        sed -i '' "s|^PATTERN=.*|PATTERN=\"$val\"|" "$CONFIG"
+        echo "Updated PATTERN to '$val'"
+      fi
+      ;;
+    4)
+      echo -n "New fabric model [${FABRIC_MODEL:-<default>}]: "
+      read -r val
+      if [[ -n "$val" ]]; then
+        if grep -q "^FABRIC_MODEL=" "$CONFIG"; then
+          sed -i '' "s|^FABRIC_MODEL=.*|FABRIC_MODEL=\"$val\"|" "$CONFIG"
+        else
+          echo "FABRIC_MODEL=\"$val\"" >> "$CONFIG"
+        fi
+        echo "Updated FABRIC_MODEL to '$val'"
+      fi
+      ;;
+    q|Q|"")
+      echo "No changes made."
+      ;;
+    *)
+      echo "Invalid choice." >&2
+      exit 1
+      ;;
+  esac
+  exit 0
+}
+
+# ── Arg parsing ──
+
+usage() {
+  cat <<'USAGE'
+Usage: wiki-add [OPTIONS] <url>
+
+Commands:
+  --setup                 First-time setup (creates config and directory structure)
+  --config                View or change configuration
+
+Options:
+  -c, --category <name>   Category for the content (e.g., ccna, system-design)
+  -h, --help              Show this help message
+
+Examples:
+  wiki-add --setup
+  wiki-add --config
+  wiki-add -c ccna "https://academy.networkchuck.com/..."
+  wiki-add -c system-design "https://www.hellointerview.com/..."
+  wiki-add -c ccna "https://example.com/study-plan.pdf"
+  wiki-add -c ccna "https://youtube.com/watch?v=..."
+USAGE
+  exit 0
+}
+
+CATEGORY=""
+URL=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --setup) run_setup ;;
+    --config) run_config ;;
+    -c|--category) CATEGORY="$2"; shift 2 ;;
+    -h|--help) usage ;;
+    -*) echo "Unknown option: $1" >&2; exit 1 ;;
+    *) URL="$1"; shift ;;
+  esac
+done
+
+# ── Load config (required for URL processing) ──
+
+if [[ ! -f "$CONFIG" ]]; then
+  echo "No config found. Run 'wiki-add --setup' first." >&2
+  exit 1
+fi
+source "$CONFIG"
+
+RAW_DIR="$WIKI_ROOT/raw"
+VAULT_DIR="$WIKI_ROOT/$VAULT_NAME"
+TOPICS_DIR="$VAULT_DIR/$TOPICS_SUBDIR"
+INDEX="$VAULT_DIR/index.md"
+LOG="$VAULT_DIR/log.md"
+DATE=$(date +%Y-%m-%d)
+
+if [[ -z "$URL" ]]; then
+  echo "Error: URL is required" >&2
+  usage
+fi
+
+if [[ -z "$CATEGORY" ]]; then
+  echo -n "Category (e.g., ccna, system-design): "
+  read -r CATEGORY
+fi
+
+mkdir -p "$TOPICS_DIR" "$RAW_DIR"
+
+# ── Detect URL type ──
+
+detect_url_type() {
+  local url="$1"
+  if [[ "$url" =~ youtube\.com|youtu\.be ]]; then
+    echo "youtube"
+  elif [[ "$url" =~ \.pdf($|\?) ]]; then
+    echo "pdf"
+  else
+    echo "web"
+  fi
+}
+
+# ── Generate slug for raw file ──
+
+slug=$(echo "$URL" | sed 's|https\?://||;s|[^a-zA-Z0-9]|-|g;s|-\+|-|g;s|-$||' | cut -c1-80)
+RAW_FILE="$RAW_DIR/${DATE}_${slug}.md"
+
+url_type=$(detect_url_type "$URL")
+echo "Detected content type: $url_type"
+
+# ── Build existing pages list for cross-referencing ──
+
+EXISTING_PAGES="none"
+if [[ -f "$INDEX" ]]; then
+  found=$(grep -oE '\[\[[^]]+\]\]' "$INDEX" 2>/dev/null | sed 's/\[\[//g;s/\]\]//g' | paste -sd', ' - || true)
+  if [[ -n "$found" ]]; then
+    EXISTING_PAGES="$found"
+  fi
+fi
+
+# ── Fetch raw content + generate wiki pages via fabric-ai ──
+
+FABRIC_VARS=(-v="#category:$CATEGORY" -v="#date:$DATE" -v="#existing_pages:$EXISTING_PAGES")
+FABRIC_MODEL_FLAG=()
+if [[ -n "${FABRIC_MODEL:-}" ]]; then
+  FABRIC_MODEL_FLAG=(-m "$FABRIC_MODEL")
+fi
+
+case "$url_type" in
+  youtube)
+    echo "Fetching YouTube transcript and generating wiki pages..."
+    fabric-ai -y "$URL" -p "$PATTERN" "${FABRIC_VARS[@]}" "${FABRIC_MODEL_FLAG[@]}" > "$RAW_FILE.out" 2>/tmp/wiki-add-fabric.log || true
+    # Archive raw transcript separately
+    fabric-ai -y "$URL" --transcript > "$RAW_FILE" 2>/tmp/wiki-add-fabric.log || true
+    ;;
+  pdf)
+    if ! command -v pdftotext &>/dev/null; then
+      echo "Error: pdftotext not found. Install with: brew install poppler" >&2
+      exit 1
+    fi
+    echo "Downloading PDF..."
+    tmp_pdf=$(mktemp /tmp/wiki-add-XXXXX.pdf)
+    curl -sL "$URL" -o "$tmp_pdf"
+    echo "Extracting text from PDF..."
+    pdftotext -layout "$tmp_pdf" "$RAW_FILE"
+    rm -f "$tmp_pdf"
+    echo "Generating wiki pages..."
+    cat "$RAW_FILE" | fabric-ai -p "$PATTERN" "${FABRIC_VARS[@]}" "${FABRIC_MODEL_FLAG[@]}" > "$RAW_FILE.out" 2>/tmp/wiki-add-fabric.log || true
+    ;;
+  web)
+    echo "Scraping and generating wiki pages..."
+    fabric-ai -u "$URL" -p "$PATTERN" "${FABRIC_VARS[@]}" "${FABRIC_MODEL_FLAG[@]}" > "$RAW_FILE.out" 2>/tmp/wiki-add-fabric.log || true
+    # Archive raw scrape via Jina Reader API
+    curl -sL "https://r.jina.ai/$URL" > "$RAW_FILE" 2>/dev/null || true
+    ;;
+esac
+
+if [[ -s "$RAW_FILE" ]]; then
+  RAW_LINES=$(wc -l < "$RAW_FILE" | tr -d ' ')
+  echo "Archived $RAW_LINES lines of raw content -> $RAW_FILE"
+fi
+
+if [[ ! -s "$RAW_FILE.out" ]]; then
+  echo "Error: fabric-ai produced no output" >&2
+  exit 1
+fi
+
+echo "Raw content archived -> $RAW_FILE"
+
+# ── Split fabric output into individual wiki pages ──
+
+split_pages() {
+  local input_file="$1"
+  local topics_dir="$2"
+
+  python3 -c "
+import re, os, sys
+
+content = open('$input_file').read()
+topics_dir = '$topics_dir'
+
+# Split on ===PAGE: markers — handles missing ===END_PAGE=== by treating
+# the next ===PAGE: as the implicit boundary
+chunks = re.split(r'===PAGE:\s*', content)
+
+created_files = []
+count = 0
+for chunk in chunks:
+    chunk = chunk.strip()
+    if not chunk:
+        continue
+
+    # Strip ===END_PAGE=== if present
+    chunk = re.sub(r'===END_PAGE===\s*$', '', chunk).strip()
+    chunk = re.sub(r'===END_PAGE===', '', chunk).strip()
+
+    first_newline = chunk.find('\n')
+    if first_newline == -1:
+        continue
+
+    raw_filename = chunk[:first_newline].strip().rstrip('=').strip()
+    body = chunk[first_newline:].strip()
+
+    if not raw_filename or not body:
+        continue
+
+    # Strip .md extension before sanitizing, then re-add it
+    base_name = raw_filename
+    if base_name.endswith('.md'):
+        base_name = base_name[:-3]
+    base_name = re.sub(r'[^\w\s\-]', '', base_name).strip()
+    if not base_name:
+        continue
+    filename = base_name + '.md'
+
+    # Handle duplicate filenames by appending a counter
+    filepath = os.path.join(topics_dir, filename)
+    if filepath in created_files:
+        base = filename.rsplit('.md', 1)[0]
+        n = 2
+        while os.path.join(topics_dir, f'{base} {n}.md') in created_files:
+            n += 1
+        filename = f'{base} {n}.md'
+        filepath = os.path.join(topics_dir, filename)
+
+    with open(filepath, 'w') as f:
+        f.write(body + '\n')
+
+    created_files.append(filepath)
+    print(f'  Created: topics/{filename}')
+    count += 1
+
+# Validate wikilinks: check that [[links]] point to real pages
+all_page_names = set()
+for fp in created_files:
+    all_page_names.add(os.path.basename(fp).rsplit('.md', 1)[0])
+# Include existing pages in the vault
+for fname in os.listdir(topics_dir):
+    if fname.endswith('.md'):
+        all_page_names.add(fname.rsplit('.md', 1)[0])
+
+for fp in created_files:
+    with open(fp) as f:
+        text = f.read()
+    links = re.findall(r'\[\[([^\]]+)\]\]', text)
+    for link in links:
+        if link not in all_page_names:
+            print(f'  Warning: orphan link [[{link}]] in {os.path.basename(fp)}')
+
+print(f'---TOTAL:{count}---')
+"
+}
+
+echo "Splitting pages into vault..."
+split_output=$(split_pages "$RAW_FILE.out" "$TOPICS_DIR")
+echo "$split_output" | grep -v "^---TOTAL:"
+
+page_count=$(echo "$split_output" | grep -o -e '---TOTAL:[0-9]*---' | sed 's/---TOTAL:\([0-9]*\)---/\1/' || echo "0")
+echo "Generated $page_count page(s)"
+
+rm -f "$RAW_FILE.out"
+
+if [[ "$page_count" -eq 0 ]]; then
+  echo "Warning: No pages were generated. Check /tmp/wiki-add-debug.txt for raw output." >&2
+  exit 1
+fi
+
+# ── Update index.md ──
+
+echo "Updating index..."
+python3 -c "
+import os, re
+
+topics_dir = '$TOPICS_DIR'
+index_file = '$INDEX'
+
+categories = {}
+for fname in sorted(os.listdir(topics_dir)):
+    if not fname.endswith('.md'):
+        continue
+    filepath = os.path.join(topics_dir, fname)
+    with open(filepath) as f:
+        content = f.read()
+    cat_match = re.search(r'\*\*Category:\*\*\s*(\S+)', content)
+    category = cat_match.group(1) if cat_match else 'uncategorized'
+    page_name = fname.replace('.md', '')
+    categories.setdefault(category, []).append(page_name)
+
+lines = ['# Wiki Index', '', 'Auto-generated index of all wiki pages.', '']
+for cat in sorted(categories):
+    lines.append(f'## {cat.upper()}')
+    lines.append('')
+    for page in sorted(categories[cat]):
+        lines.append(f'- [[{page}]]')
+    lines.append('')
+
+with open(index_file, 'w') as f:
+    f.write('\n'.join(lines))
+
+total = sum(len(v) for v in categories.values())
+print(f'  Index updated: {total} pages across {len(categories)} categories')
+"
+
+# ── Append to log ──
+
+echo "- **$DATE** | Added \`$url_type\` | Category: \`$CATEGORY\` | Source: $URL" >> "$LOG"
+
+echo ""
+echo "Done! Open your Obsidian vault at: $VAULT_DIR"

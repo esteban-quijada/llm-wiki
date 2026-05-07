@@ -1,0 +1,8 @@
+# User-specific config
+config.env
+
+# User-generated content
+raw/
+
+# Obsidian vault (name is configurable via setup)
+llm-wiki-obsidian-vault/
