@@ -33,7 +33,7 @@ fabric-ai must be configured with at least one LLM provider. Run `fabric-ai --se
 ## Install
 
 ```bash
-git clone https://github.com/your-username/llm-wiki.git
+git clone https://github.com/esteban-quijada/llm-wiki.git
 cd llm-wiki
 ./bin/wiki-add --setup
 ```
