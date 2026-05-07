@@ -434,7 +434,7 @@ for chunk in chunks:
         source_url = '$URL'
         if source_url in existing_content:
             cat_name = os.path.basename(topics_dir)
-        print(f'  EXISTS: topics/{cat_name}/{filename}')
+            print(f'  EXISTS: topics/{cat_name}/{filename}')
             existing_conflicts.append((filepath, body, filename))
             continue
 
