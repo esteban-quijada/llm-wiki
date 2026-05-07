@@ -280,7 +280,8 @@ if [[ -z "$CATEGORY" ]]; then
   read -r CATEGORY
 fi
 
-mkdir -p "$TOPICS_DIR" "$RAW_DIR"
+CATEGORY_DIR="$TOPICS_DIR/$CATEGORY"
+mkdir -p "$CATEGORY_DIR" "$RAW_DIR"
 
 # ── Detect URL type ──
 
@@ -432,7 +433,8 @@ for chunk in chunks:
             existing_content = f.read()
         source_url = '$URL'
         if source_url in existing_content:
-            print(f'  EXISTS: topics/{filename}')
+            cat_name = os.path.basename(topics_dir)
+        print(f'  EXISTS: topics/{cat_name}/{filename}')
             existing_conflicts.append((filepath, body, filename))
             continue
 
@@ -449,7 +451,8 @@ for chunk in chunks:
         f.write(body + '\n')
 
     created_files.append(filepath)
-    print(f'  Created: topics/{filename}')
+    cat_name = os.path.basename(topics_dir)
+    print(f'  Created: topics/{cat_name}/{filename}')
     count += 1
 
 # Prompt for conflicts
@@ -465,19 +468,20 @@ if existing_conflicts:
             with open(filepath, 'w') as f:
                 f.write(body + '\n')
             created_files.append(filepath)
-            print(f'  Replaced: topics/{filename}')
+            print(f'  Replaced: topics/{os.path.basename(topics_dir)}/{filename}')
             count += 1
     else:
         print(f'  Skipped {len(existing_conflicts)} existing page(s).')
 
-# Validate wikilinks: check that [[links]] point to real pages
+# Validate wikilinks: check all pages across all category directories
 all_page_names = set()
 for fp in created_files:
     all_page_names.add(os.path.basename(fp).rsplit('.md', 1)[0])
-# Include existing pages in the vault
-for fname in os.listdir(topics_dir):
-    if fname.endswith('.md'):
-        all_page_names.add(fname.rsplit('.md', 1)[0])
+parent_dir = os.path.dirname(topics_dir)
+for root, dirs, files in os.walk(parent_dir):
+    for fname in files:
+        if fname.endswith('.md'):
+            all_page_names.add(fname.rsplit('.md', 1)[0])
 
 for fp in created_files:
     with open(fp) as f:
@@ -492,7 +496,7 @@ print(f'---TOTAL:{count}---')
 }
 
 echo "Splitting pages into vault..."
-split_output=$(split_pages "$RAW_FILE.out" "$TOPICS_DIR")
+split_output=$(split_pages "$RAW_FILE.out" "$CATEGORY_DIR")
 echo "$split_output" | grep -v "^---TOTAL:"
 
 page_count=$(echo "$split_output" | grep -o -e '---TOTAL:[0-9]*---' | sed 's/---TOTAL:\([0-9]*\)---/\1/' || echo "0")
@@ -515,16 +519,14 @@ topics_dir = '$TOPICS_DIR'
 index_file = '$INDEX'
 
 categories = {}
-for fname in sorted(os.listdir(topics_dir)):
-    if not fname.endswith('.md'):
-        continue
-    filepath = os.path.join(topics_dir, fname)
-    with open(filepath) as f:
-        content = f.read()
-    cat_match = re.search(r'\*\*Category:\*\*\s*(\S+)', content)
-    category = cat_match.group(1) if cat_match else 'uncategorized'
-    page_name = fname.replace('.md', '')
-    categories.setdefault(category, []).append(page_name)
+for entry in sorted(os.listdir(topics_dir)):
+    entry_path = os.path.join(topics_dir, entry)
+    if os.path.isdir(entry_path):
+        category = entry
+        for fname in sorted(os.listdir(entry_path)):
+            if fname.endswith('.md'):
+                page_name = fname.replace('.md', '')
+                categories.setdefault(category, []).append(page_name)
 
 lines = ['# Wiki Index', '', 'Auto-generated index of all wiki pages.', '']
 for cat in sorted(categories):
