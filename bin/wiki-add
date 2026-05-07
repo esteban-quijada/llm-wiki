@@ -313,20 +313,12 @@ if [[ -f "$INDEX" ]]; then
   fi
 fi
 
-# ── Fetch raw content + generate wiki pages via fabric-ai ──
-
-FABRIC_VARS=(-v="#category:$CATEGORY" -v="#date:$DATE" -v="#existing_pages:$EXISTING_PAGES")
-FABRIC_MODEL_FLAG=()
-if [[ -n "${FABRIC_MODEL:-}" ]]; then
-  FABRIC_MODEL_FLAG=(-m "$FABRIC_MODEL")
-fi
+# ── Step 1: Fetch raw content ──
 
 case "$url_type" in
   youtube)
-    echo "Fetching YouTube transcript and generating wiki pages..."
-    fabric-ai -y "$URL" -p "$PATTERN" "${FABRIC_VARS[@]}" "${FABRIC_MODEL_FLAG[@]}" > "$RAW_FILE.out" 2>/tmp/wiki-add-fabric.log || true
-    # Archive raw transcript separately
-    fabric-ai -y "$URL" --transcript > "$RAW_FILE" 2>/tmp/wiki-add-fabric.log || true
+    echo "Fetching YouTube transcript..."
+    fabric-ai -y "$URL" -p extract_wisdom 2>/tmp/wiki-add-fabric.log > "$RAW_FILE" || true
     ;;
   pdf)
     if ! command -v pdftotext &>/dev/null; then
@@ -339,28 +331,50 @@ case "$url_type" in
     echo "Extracting text from PDF..."
     pdftotext -layout "$tmp_pdf" "$RAW_FILE"
     rm -f "$tmp_pdf"
-    echo "Generating wiki pages..."
-    cat "$RAW_FILE" | fabric-ai -p "$PATTERN" "${FABRIC_VARS[@]}" "${FABRIC_MODEL_FLAG[@]}" > "$RAW_FILE.out" 2>/tmp/wiki-add-fabric.log || true
     ;;
   web)
-    echo "Scraping and generating wiki pages..."
-    fabric-ai -u "$URL" -p "$PATTERN" "${FABRIC_VARS[@]}" "${FABRIC_MODEL_FLAG[@]}" > "$RAW_FILE.out" 2>/tmp/wiki-add-fabric.log || true
-    # Archive raw scrape via Jina Reader API
+    echo "Scraping web page..."
     curl -sL "https://r.jina.ai/$URL" > "$RAW_FILE" 2>/dev/null || true
     ;;
 esac
 
-if [[ -s "$RAW_FILE" ]]; then
-  RAW_LINES=$(wc -l < "$RAW_FILE" | tr -d ' ')
-  echo "Archived $RAW_LINES lines of raw content -> $RAW_FILE"
-fi
-
-if [[ ! -s "$RAW_FILE.out" ]]; then
-  echo "Error: fabric-ai produced no output" >&2
+if [[ ! -s "$RAW_FILE" ]]; then
+  echo "Error: Failed to fetch content from URL (empty result)" >&2
+  if [[ -s /tmp/wiki-add-fabric.log ]]; then
+    echo "fabric-ai log:" >&2
+    cat /tmp/wiki-add-fabric.log >&2
+  fi
   exit 1
 fi
 
-echo "Raw content archived -> $RAW_FILE"
+RAW_LINES=$(wc -l < "$RAW_FILE" | tr -d ' ')
+echo "Fetched $RAW_LINES lines -> $RAW_FILE"
+
+# ── Step 2: Generate wiki pages ──
+
+FABRIC_MODEL_FLAG=()
+if [[ -n "${FABRIC_MODEL:-}" ]]; then
+  FABRIC_MODEL_FLAG=(-m "$FABRIC_MODEL")
+fi
+
+echo "Generating wiki pages..."
+{
+  echo "SOURCE_URL: $URL"
+  echo "CATEGORY: $CATEGORY"
+  echo "DATE_ADDED: $DATE"
+  echo "EXISTING_WIKI_PAGES: $EXISTING_PAGES"
+  echo "---"
+  cat "$RAW_FILE"
+} | fabric-ai -p "$PATTERN" "${FABRIC_MODEL_FLAG[@]}" > "$RAW_FILE.out" 2>/tmp/wiki-add-fabric.log || true
+
+if [[ ! -s "$RAW_FILE.out" ]]; then
+  echo "Error: fabric-ai produced no output" >&2
+  if [[ -s /tmp/wiki-add-fabric.log ]]; then
+    echo "fabric-ai log:" >&2
+    cat /tmp/wiki-add-fabric.log >&2
+  fi
+  exit 1
+fi
 
 # ── Split fabric output into individual wiki pages ──
 
@@ -379,6 +393,7 @@ topics_dir = '$topics_dir'
 chunks = re.split(r'===PAGE:\s*', content)
 
 created_files = []
+existing_conflicts = []
 count = 0
 for chunk in chunks:
     chunk = chunk.strip()
@@ -408,8 +423,20 @@ for chunk in chunks:
         continue
     filename = base_name + '.md'
 
-    # Handle duplicate filenames by appending a counter
     filepath = os.path.join(topics_dir, filename)
+
+    # Check for existing file on disk (from a previous run)
+    # Only treat as conflict if the existing page has the same source URL
+    if os.path.exists(filepath) and filepath not in created_files:
+        with open(filepath) as f:
+            existing_content = f.read()
+        source_url = '$URL'
+        if source_url in existing_content:
+            print(f'  EXISTS: topics/{filename}')
+            existing_conflicts.append((filepath, body, filename))
+            continue
+
+    # Handle duplicate within the same batch
     if filepath in created_files:
         base = filename.rsplit('.md', 1)[0]
         n = 2
@@ -424,6 +451,24 @@ for chunk in chunks:
     created_files.append(filepath)
     print(f'  Created: topics/{filename}')
     count += 1
+
+# Prompt for conflicts
+if existing_conflicts:
+    print(f'')
+    print(f'  {len(existing_conflicts)} page(s) already exist. Overwrite? [y/N] ', end='', flush=True)
+    try:
+        answer = input().strip().lower()
+    except EOFError:
+        answer = ''
+    if answer == 'y':
+        for filepath, body, filename in existing_conflicts:
+            with open(filepath, 'w') as f:
+                f.write(body + '\n')
+            created_files.append(filepath)
+            print(f'  Replaced: topics/{filename}')
+            count += 1
+    else:
+        print(f'  Skipped {len(existing_conflicts)} existing page(s).')
 
 # Validate wikilinks: check that [[links]] point to real pages
 all_page_names = set()

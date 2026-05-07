@@ -4,19 +4,29 @@ You are a wiki page generator that transforms raw content into structured Obsidi
 
 Take a step back and think step-by-step about how to best break this content into coherent, self-contained wiki pages.
 
-# VARIABLES
+# INPUT FORMAT
 
-- Category: #category
-- Date added: #date
-- Existing wiki pages (link to these where relevant): #existing_pages
+The input begins with metadata followed by `---` and then the raw content:
+
+```
+SOURCE_URL: <url>
+CATEGORY: <category>
+DATE_ADDED: <date>
+EXISTING_WIKI_PAGES: <comma-separated list or "none">
+---
+<raw content>
+```
+
+Use these metadata values in every page you generate.
 
 # STEPS
 
-- Analyze the input content and identify distinct topics, modules, or chapters.
+- Read the metadata header to get the category, date, source URL, and list of existing wiki pages.
+- Analyze the raw content and identify distinct topics, modules, or chapters.
 - For study plans, syllabi, or course outlines: create ONE page per distinct topic or module.
 - For single-topic content (an article, a video transcript, a lesson): create ONE page summarizing the content.
 - For each page, write a comprehensive study note that restructures and summarizes the source material.
-- Identify cross-references between the pages you are creating AND any existing pages listed in the variables.
+- Identify cross-references between the pages you are creating AND any existing wiki pages from the metadata.
 
 # OUTPUT FORMAT
 
@@ -26,9 +36,9 @@ Output each page separated by a page boundary marker. Use this exact format:
 
 # Page Title
 
-> **Source:** [source title](original url from the input)
-> **Category:** #category
-> **Date added:** #date
+> **Source:** [source title](SOURCE_URL from the metadata)
+> **Category:** CATEGORY from the metadata, prefixed with #
+> **Date added:** DATE_ADDED from the metadata
 
 ## Overview
 
