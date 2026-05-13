@@ -26,6 +26,7 @@ URL --> fabric-ai fetches content --> wiki_generate pattern splits into topics
 | fabric-ai | Yes | `brew install fabric-ai` |
 | python3 | Yes | Pre-installed on macOS |
 | curl | Yes | Pre-installed on macOS |
+| yt-dlp | For YouTube | `brew install yt-dlp` |
 | poppler (pdftotext) | For PDFs | `brew install poppler` |
 
 fabric-ai must be configured with at least one LLM provider. Run `fabric-ai --setup` if you haven't already.
